@@ -1,150 +1,80 @@
+#!/usr/bin/env python3
+
 '''
-Attmept at creating a linear regression analysis script for quick model validation for any event.
+For an SWMF magnetometer file, obtain the corresponding observations from
+SuperMAG and create validation metrics as a saved table.
 '''
+
 import os
-import numpy as np
 import datetime as dt
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
+
+import numpy as np
+from spacepy.pybats.bats import MagFile
+
 import validator as vd
+from supermag.supermag_api import fetch_mag
 
-def read_obs(filename):
-    '''
-    Read mag file and create arrays with each variable.
-    TO-DO 
-    - Pull mag files directly from supermag
+parser = ArgumentParser(description=__doc__,
+                        formatter_class=RawDescriptionHelpFormatter)
+parser.add_argument("mod", type=str, help="Path of SWMF model results " +
+                    "'virtual magnetometer' file.")
+parser.add_argument('-m', '--mags', type=str, default='all', help="Specify " +
+                    "stations to use from SWMF file. Defaults to 'all', or " +
+                    "all stations present in file. Example: MEA,HON")
+parser.add_argument("-d", "--debug", default=False, action='store_true',
+                    help="Turn on debugging mode.")
+parser.add_argument("-u", "--user", type=str, default='dwelling',
+                    help="Set the SuperMAG user name for downloading data.")
+args = parser.parse_args()
 
-    Parameters
-    ==========
-    filename : string
-       Path to the file to open and parse.
+# Load SWMF file.
+model = MagFile(args.mod)
 
-    Returns
-    =======
-    data : dict
-       A dictionary containing numpy arrays of the values in the file,
-       including "time", "bx", "by", "bz", and "dBdt".
+# Get list of stations to use. Only keep stations that are in the SWMF file.
+if args.mags == 'all':
+    stats = model.attrs['namemag']
+    # Remove DST from our model list.
+    if 'DST' in stats:
+        stats.pop(stats.index('DST'))
+else:
+    # Create a list of mags from the argument assuming a comma-separated list
+    stats = []
+    for s in args.mags.split(','):
+        if s in model.attrs['namemag']:
+            stats.append(s)
+        elif args.debug:
+            print(f'{s} not in SWMF output file. Skipping...')
 
-    Examples
-    ========
-    >>> data = read_mag('data/ott_obs.txt')
-    >>> data['time']
-    '''
+# Get time period from file
+tstart, tend = model['time'][0], model['time'][-1]
 
-    with open(filename, 'r') as f:
-        # Skip header lines.
-        trash = 'garbage'
-        while '[year]' not in trash:
-            trash = f.readline()
-        # Slurp in remaning lines:
-        lines = f.readlines()
+if args.debug:
+    print(f'Working on file {args.mod}')
+    print(f'Start and end time: \n\t{tstart}\n\t{tend}')
+    print(f'Mag list: {stats}')
 
-    # Count lines, produce empty container.
-    nLines = len(lines)
-    data = {'time': np.zeros(nLines, dtype=object)}
-    for v in ['bx', 'by', 'bz']:
-        data[v] = np.zeros(nLines)
-
-    # Now, loop through dem lines:
-    for i, line in enumerate(lines):
-        # Break into parts:
-        parts = line.split()
-
-        # Extract and convert time:
-        t_raw = '_'.join(parts[:6])
-        data['time'][i] = dt.datetime.strptime(
-            t_raw, '%Y_%m_%d_%H_%M_%S')
-
-        # Extract values:
-        for v, x in zip(['bx', 'by', 'bz'], parts[-3:]):
-            data[v][i] = x
-
-    # Calculate time derivatives.  Follow the forward difference
-    # method and definition of dB_H used in Pulkkinen et al. 2013.
-    # Get dt values:
-    dt = np.array([x.total_seconds() for x in np.diff(data['time'])])
-
-    # Loop through variables.  Start by
-    data['dBdt'] = np.sqrt((data['bx'][1:] - data['bx'][:-1])**2 +
-                           (data['by'][1:] - data['by'][:-1])**2) / dt
-
-    return data
-
-'''
-Set model array to same datetime size as observation file. 
-'''
-data['time']
-
-def read_mod(filename):
- with open(filename, 'r') as f:
-        # Skip header lines.
-        trash = 'garbage'
-        while '[year]' not in trash:
-            trash = f.readline()
-        # Slurp in remaning lines:
-        lines = f.readlines()
-
-    # Count lines, produce empty container.
-    nLines = len(lines)
-    data = {'time': np.zeros(nLines, dtype=object)}
-    for v in ['bx', 'by', 'bz']:
-        data[v] = np.zeros(nLines)
-
-    # Now, loop through dem lines:
-    for i, line in enumerate(lines):
-        # Break into parts:
-        parts = line.split()
-
-        # Extract and convert time:
-        t_raw = '_'.join(parts[:6])
-        data['time'][i] = dt.datetime.strptime(
-            t_raw, '%Y_%m_%d_%H_%M_%S')
-
-        # Extract values:
-        for v, x in zip(['bx', 'by', 'bz'], parts[-3:]):
-            data[v][i] = x
-
-    # Calculate time derivatives.  Follow the forward difference
-    # method and definition of dB_H used in Pulkkinen et al. 2013.
-    # Get dt values:
-    dt = np.array([x.total_seconds() for x in np.diff(data['time'])])
-
-    # Loop through variables.  Start by
-    data['dBdt'] = np.sqrt((data['bx'][1:] - data['bx'][:-1])**2 +
-                           (data['by'][1:] - data['by'][:-1])**2) / dt
-
-    return data
+# Fetch data:
+allobs = {}
+for s in stats:
+    allobs[s] = fetch_mag(tstart, tend, args.user, s)
+# --if it exists in backup folder, use it as-is.
+# --Else, download fresh.
 
 
 
-'''
-Open test files. 
-'''
-
-obs = read_obs('tests/data/ott_obs.txt')
-mod = read_mod('tests/data/ott_mod.txt')
-'''
-same array size?
-'''
-np
-
-tlim = [dt.datetime(2003, 10, 29, 6, 0, 0),
-        dt.datetime(2003, 10, 30, 6, 0, 0)]
-
-'''
-Calculate mean sq. error for each data point in each array.
-'''
-
-mse = np.mean(np.square(obs['dBdt'] - mod['dBdt']))
-
-print('MSE'=mse)
-
-'''
-Calculate RMSE
-'''
-
-rmse =  np.sqrt(np.mean((obs['dBdt']-mod['dBdt'])**2))
-
-print('RMSE'=rmse)
-
-'''
-obs array is bigger than mod needs to be the same size to calculate values
-'''
+# mse = np.mean(np.square(obs['dBdt'] - mod['dBdt']))
+#
+# #print('MSE'=mse)
+#
+# '''
+# Calculate RMSE
+# '''
+#
+# rmse =  np.sqrt(np.mean((obs['dBdt']-mod['dBdt'])**2))
+#
+# # print('RMSE'=rmse)
+#
+# '''
+# obs array is bigger than mod needs to be the same size to calculate values
+# '''
